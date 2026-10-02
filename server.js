@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('node:http');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Pool } = require('pg');
@@ -142,8 +143,8 @@ function getIdentity(req) {
   if (DEV_AUTH) {
     const c = parseCookies(req.headers.cookie).dev_user;
     if (c) {
-      const [id, name] = c.split('|');
-      return { id: `dev:${id}`, name: name || id, email: `${id}@example.com` };
+      const [id, name, email] = c.split('|');
+      return { id: `dev:${id}`, name: name || id, email: email || `${id}@example.com` };
     }
   }
   const id = req.headers['x-freepod-user'];
@@ -162,6 +163,13 @@ async function upsertUser(db, user) {
      WHERE users.name <> EXCLUDED.name OR users.email <> EXCLUDED.email`,
     [user.id, user.name, user.email],
   );
+}
+
+// Gravatar identifies avatars by the SHA-256 of the normalized address. Only
+// this hash leaves the server; email addresses are never sent to clients.
+function gravatarHash(email) {
+  const e = String(email || '').trim().toLowerCase();
+  return e ? crypto.createHash('sha256').update(e).digest('hex') : null;
 }
 
 function requireUser(req) {
@@ -250,7 +258,7 @@ function parseOptions(raw) {
 
 async function loadPollState(db, where, value) {
   const { rows: [p] } = await db.query(
-    `SELECT p.*, u.name AS owner_name
+    `SELECT p.*, u.name AS owner_name, u.email AS owner_email
        FROM polls p JOIN users u ON u.id = p.owner_id
       WHERE p.${where} = $1`,
     [value],
@@ -265,7 +273,7 @@ async function loadPollState(db, where, value) {
       [p.id],
     ),
     db.query(
-      `SELECT v.option_id, v.user_id, u.name
+      `SELECT v.option_id, v.user_id, u.name, u.email
          FROM votes v JOIN users u ON u.id = v.user_id
         WHERE v.poll_id = $1
         ORDER BY v.created_at, v.user_id`,
@@ -275,8 +283,9 @@ async function loadPollState(db, where, value) {
   const byOption = new Map(options.map((o) => [o.id, []]));
   const participants = new Map();
   for (const v of votes) {
-    byOption.get(v.option_id)?.push({ id: v.user_id, name: v.name });
-    participants.set(v.user_id, v.name);
+    const person = { id: v.user_id, name: v.name, avatar: gravatarHash(v.email) };
+    byOption.get(v.option_id)?.push(person);
+    participants.set(v.user_id, person);
   }
   return {
     id: p.id,
@@ -287,10 +296,10 @@ async function loadPollState(db, where, value) {
     tz: p.tz,
     closed: p.closed,
     finalOptionId: p.final_option_id,
-    owner: { id: p.owner_id, name: p.owner_name },
+    owner: { id: p.owner_id, name: p.owner_name, avatar: gravatarHash(p.owner_email) },
     createdAt: p.created_at,
     version: Number(p.version),
-    participants: [...participants].map(([id, name]) => ({ id, name })),
+    participants: [...participants.values()],
     options: options.map((o) => ({ ...o, voters: byOption.get(o.id) })),
   };
 }
@@ -418,7 +427,7 @@ const api = {
     const user = getIdentity(req);
     if (user) await upsertUser(pool, user);
     sendJson(res, 200, {
-      user: user ? { id: user.id, name: user.name, email: user.email } : null,
+      user: user ? { id: user.id, name: user.name, email: user.email, avatar: gravatarHash(user.email) } : null,
       loginUrl: DEV_AUTH ? '/dev/login' : '/.freepod/auth/login',
       logoutUrl: DEV_AUTH ? '/dev/logout' : '/.freepod/auth/logout',
     });
@@ -785,9 +794,10 @@ async function route(req, res) {
   if (DEV_AUTH && pathname === '/dev/login') {
     const u = slugify(url.searchParams.get('u') || 'alice') || 'alice';
     const n = url.searchParams.get('n') || u[0].toUpperCase() + u.slice(1);
+    const e = (url.searchParams.get('e') || '').replace(/\|/g, '');
     const rd = url.searchParams.get('rd') || '/';
     res.writeHead(302, {
-      'Set-Cookie': `dev_user=${encodeURIComponent(`${u}|${n}`)}; Path=/; SameSite=Lax`,
+      'Set-Cookie': `dev_user=${encodeURIComponent(`${u}|${n}|${e}`)}; Path=/; SameSite=Lax`,
       Location: rd.startsWith('/') ? rd : '/',
     });
     return res.end();

@@ -201,6 +201,8 @@ img, svg { display: block; }
   font-size: 11px; font-weight: 650; letter-spacing: .02em;
   box-shadow: 0 0 0 2px var(--surface);
 }
+.avatar { position: relative; overflow: hidden; }
+.avatar-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 50%; background: var(--surface); }
 .avatar-sm { width: 22px; height: 22px; font-size: 9.5px; }
 .avatar-lg { width: 36px; height: 36px; font-size: 13px; }
 .avatar.is-me { background: var(--accent); color: var(--on-accent); }

@@ -114,10 +114,23 @@ function hash(s) {
   return h;
 }
 
+const AVATAR_PX = { sm: 22, '': 28, lg: 36 };
+
+// Initials are always rendered; a Gravatar, when the person has one, is laid
+// over them. d=404 makes Gravatar fail instead of serving a generic image, and
+// the error handler below then drops the <img> so the initials show through.
 export function avatar(person, { size = '', me = false } = {}) {
   const tone = AVATAR_TONES[hash(person.id) % AVATAR_TONES.length];
-  return `<span class="avatar ${size ? `avatar-${size}` : ''} ${me ? 'is-me' : ''}" style="--av:${tone}" title="${esc(person.name)}">${esc(initials(person.name))}</span>`;
+  const px = (AVATAR_PX[size] || 28) * 2;
+  const img = /^[0-9a-f]{64}$/.test(person.avatar || '')
+    ? `<img class="avatar-img" src="https://gravatar.com/avatar/${person.avatar}?s=${px}&d=404" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+    : '';
+  return `<span class="avatar ${size ? `avatar-${size}` : ''} ${me ? 'is-me' : ''}" style="--av:${tone}" title="${esc(person.name)}">${esc(initials(person.name))}${img}</span>`;
 }
+
+document.addEventListener('error', (e) => {
+  if (e.target instanceof HTMLImageElement && e.target.classList.contains('avatar-img')) e.target.remove();
+}, true);
 
 export function renderHeader(me) {
   const header = document.querySelector('.site-header .wrap');

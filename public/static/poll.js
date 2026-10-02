@@ -81,7 +81,7 @@ function myIds(s) {
 function view() {
   if (!pending || !me.user) return state;
   const mine = new Set(pending);
-  const meVoter = { id: me.user.id, name: me.user.name };
+  const meVoter = { id: me.user.id, name: me.user.name, avatar: me.user.avatar };
   const options = state.options.map((o) => {
     const others = o.voters.filter((v) => v.id !== me.user.id);
     return { ...o, voters: mine.has(o.id) ? [...others, meVoter] : others };
