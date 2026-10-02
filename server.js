@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Pool } = require('pg');
+const og = require('./og');
 
 const PORT = Number(process.env.PORT || 8080);
 const DEV_AUTH = process.env.DEV_AUTH === '1';
@@ -95,7 +96,7 @@ class HttpError extends Error {
 
 const RESERVED_SLUGS = new Set([
   'api', 'healthz', 'static', 'assets', 'new', 'me', 'dev', 'login', 'logout',
-  'favicon.ico', 'robots.txt', 'about', 'admin', 'settings',
+  'favicon.ico', 'robots.txt', 'about', 'admin', 'settings', 'og',
 ]);
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -723,10 +724,34 @@ function renderPage(name, req, meta) {
     .replaceAll('{{TITLE}}', escapeHtml(meta.title))
     .replaceAll('{{DESCRIPTION}}', escapeHtml(meta.description))
     .replaceAll('{{URL}}', escapeHtml(origin + meta.path))
+    .replaceAll('{{IMAGE}}', escapeHtml(origin + meta.image))
+    .replaceAll('{{IMAGE_ALT}}', escapeHtml(meta.imageAlt))
     .replaceAll('{{ORIGIN}}', escapeHtml(origin));
 }
 
 const SITE_DESCRIPTION = 'Pick a few dates, share one link, and see live which one works for everyone.';
+const HOME_IMAGE = { image: '/og/home.png', imageAlt: 'When: find the date that works for everyone' };
+
+function hostOf(req) {
+  return new URL(originOf(req)).host;
+}
+
+async function ogImage(req, res, name) {
+  let png;
+  if (name === 'home') {
+    png = await og.homeImage(hostOf(req));
+  } else {
+    const state = await loadPollState(pool, 'slug', name);
+    if (!state) throw new HttpError(404, 'Not found.');
+    png = await og.pollImage(state, hostOf(req));
+  }
+  res.writeHead(200, {
+    'Content-Type': 'image/png',
+    'Content-Length': png.length,
+    'Cache-Control': 'public, max-age=300',
+  });
+  res.end(req.method === 'HEAD' ? undefined : png);
+}
 
 function formatRange(first, last) {
   const fmt = (d, opts) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts });
@@ -737,7 +762,7 @@ function formatRange(first, last) {
 
 async function pollPage(req, res, slug) {
   const { rows: [p] } = await pool.query(
-    `SELECT p.title, p.description, u.name AS owner_name,
+    `SELECT p.title, p.description, p.version, u.name AS owner_name,
             (SELECT count(*) FROM options o WHERE o.poll_id = p.id)::int AS n,
             (SELECT min(day)::text FROM options o WHERE o.poll_id = p.id) AS first_day,
             (SELECT max(day)::text FROM options o WHERE o.poll_id = p.id) AS last_day
@@ -746,13 +771,18 @@ async function pollPage(req, res, slug) {
   );
   if (!p) {
     return sendPage(res, 404, renderPage('poll.html', req, {
-      title: 'Not found · When', description: SITE_DESCRIPTION, path: `/${slug}`,
+      title: 'Not found · When', description: SITE_DESCRIPTION, path: `/${slug}`, ...HOME_IMAGE,
     }));
   }
   const summary = p.description
     || `${p.owner_name} is looking for a date: ${p.n} option${p.n === 1 ? '' : 's'}, ${formatRange(p.first_day, p.last_day)}. Vote for the ones that work for you.`;
   sendPage(res, 200, renderPage('poll.html', req, {
-    title: `${p.title} · When`, description: summary, path: `/${slug}`,
+    title: `${p.title} · When`,
+    description: summary,
+    path: `/${slug}`,
+    // The version in the URL makes unfurlers refetch after votes change.
+    image: `/og/${slug}.png?v=${p.version}`,
+    imageAlt: `${p.title}: date options and live vote tallies`,
   }));
 }
 
@@ -820,14 +850,17 @@ async function route(req, res) {
 
   if (pathname === '/') {
     return sendPage(res, 200, renderPage('index.html', req, {
-      title: 'When — find the date that works for everyone', description: SITE_DESCRIPTION, path: '/',
+      title: 'When — find the date that works for everyone', description: SITE_DESCRIPTION, path: '/', ...HOME_IMAGE,
     }));
   }
+
+  const ogMatch = /^\/og\/([a-z0-9-]+)\.png$/.exec(pathname);
+  if (ogMatch) return ogImage(req, res, ogMatch[1]);
 
   const slug = pathname.slice(1).replace(/\/$/, '');
   if (SLUG_RE.test(slug) && !RESERVED_SLUGS.has(slug)) return pollPage(req, res, slug);
 
-  sendPage(res, 404, renderPage('poll.html', req, { title: 'Not found · When', description: SITE_DESCRIPTION, path: pathname }));
+  sendPage(res, 404, renderPage('poll.html', req, { title: 'Not found · When', description: SITE_DESCRIPTION, path: pathname, ...HOME_IMAGE }));
 }
 
 const server = http.createServer(async (req, res) => {
