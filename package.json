@@ -1,0 +1,11 @@
+{
+  "name": "when",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Find the date that works for everyone.",
+  "main": "server.js",
+  "type": "commonjs",
+  "engines": { "node": ">=22" },
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "pg": "^8.13.1" }
+}

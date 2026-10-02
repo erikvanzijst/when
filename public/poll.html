@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en-US">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{TITLE}}</title>
+<meta name="description" content="{{DESCRIPTION}}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="When">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="{{TITLE}}">
+<meta property="og:description" content="{{DESCRIPTION}}">
+<meta property="og:url" content="{{URL}}">
+<meta name="twitter:card" content="summary">
+<link rel="canonical" href="{{URL}}">
+<meta name="theme-color" content="#f6f2ea" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#131210" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT@0,9..144,300..700,0..100;1,9..144,300..700,0..100&family=Inter:wght@400..700&display=swap">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/"><img class="brand-mark" src="/static/favicon.svg" alt=""><span>When<em>?</em></span></a>
+    <div data-user></div>
+  </div>
+</header>
+<main id="app" class="wrap wrap-narrow"></main>
+<footer class="site-footer">
+  <div class="wrap">
+    <span>When — find the date that works for everyone.</span>
+    <span>Hosted on <a href="https://freepod.eu">Freepod</a></span>
+  </div>
+</footer>
+<script type="module" src="/static/poll.js"></script>
+</body>
+</html>

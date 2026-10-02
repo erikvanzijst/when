@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "deployment": {
+    "id": "bfc60dc5-d9ba-4aa0-aa08-14e7dd8f57cb",
+    "name": "custom-user-app-2jypys"
+  },
+  "user_values": {
+    "hostname": "when.prutser.freepod.eu",
+    "auth": {
+      "enabled": true,
+      "public": [
+        "^/"
+      ]
+    }
+  }
+}
