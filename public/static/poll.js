@@ -1,6 +1,6 @@
 import {
   icon, esc, $, loadSession, renderHeader, loginHref, signIn, api, toast, avatar, bindMenu,
-  dateTile, fmtDay, fmtTimeRange, fmtTz, timeZones, plural, listNames,
+  dateTile, fmtDay, fmtLongDay, fmtTimeRange, fmtTz, timeZones, plural, listNames,
 } from './common.js';
 import { createPicker } from './picker.js';
 
@@ -179,7 +179,7 @@ function renderBanner() {
   let html = '';
   if (final) {
     html = `<div class="banner banner-final">${icon('party')}
-      <div class="grow"><span>It’s decided</span><span class="final-date">${esc(fmtDay(final.day, { weekday: 'long', month: 'long', day: 'numeric' }))}${final.start ? ` · ${esc(fmtTimeRange(final.start, final.end))}` : ''}</span></div>
+      <div class="grow"><span>It’s decided</span><span class="final-date">${esc(fmtLongDay(final.day))}${final.start ? ` · ${esc(fmtTimeRange(final.start, final.end))}` : ''}</span></div>
       <button type="button" class="btn" data-ics>${icon('download')}Add to calendar</button>
     </div>`;
   } else if (justCreated && isOwner()) {
@@ -211,7 +211,7 @@ function optionHtml(o) {
     <div class="option-main">
       <div class="option-top">
         <div class="option-label">
-          <span class="when">${esc(fmtDay(o.day, { weekday: 'long', month: 'long', day: 'numeric' }))}</span>
+          <span class="when">${esc(fmtLongDay(o.day))}</span>
           ${o.start ? `<span class="time">${esc(fmtTimeRange(o.start, o.end))}</span>` : ''}
           <span class="option-tags" data-tags></span>
         </div>
@@ -256,7 +256,7 @@ function renderOptions() {
     el.setAttribute('aria-checked', String(isMine));
     el.setAttribute('aria-disabled', String(!votable));
     el.tabIndex = votable ? 0 : -1;
-    el.setAttribute('aria-label', `${fmtDay(o.day, { weekday: 'long', month: 'long', day: 'numeric' })}${o.start ? `, ${fmtTimeRange(o.start, o.end)}` : ''}: ${plural(n, 'vote')}`);
+    el.setAttribute('aria-label', `${fmtLongDay(o.day)}${o.start ? `, ${fmtTimeRange(o.start, o.end)}` : ''}: ${plural(n, 'vote')}`);
 
     el.querySelector('[data-count]').innerHTML = `<strong>${n}</strong>${total ? ` of ${total}` : ''}`;
     el.querySelector('.bar-fill').style.width = `${total ? (n / total) * 100 : 0}%`;

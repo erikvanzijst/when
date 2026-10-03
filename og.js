@@ -88,7 +88,8 @@ function fmtTime(t) {
 }
 
 function optionLabel(o) {
-  const day = fmt(o.day, { weekday: 'long', month: 'long', day: 'numeric' });
+  const sameYear = o.day.slice(0, 4) === String(new Date().getUTCFullYear());
+  const day = fmt(o.day, { weekday: 'long', month: 'long', day: 'numeric', year: sameYear ? undefined : 'numeric' });
   if (!o.start) return day;
   return `${day} · ${fmtTime(o.start)}${o.end ? ` – ${fmtTime(o.end)}` : ''}`;
 }

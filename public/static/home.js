@@ -1,5 +1,5 @@
 import {
-  icon, esc, loadSession, renderHeader, loginHref, api, ApiError, toast, dateTile, fmtDay, fmtTz,
+  icon, esc, loadSession, renderHeader, loginHref, api, ApiError, toast, dateTile, fmtDay, fmtTz, yearOpt,
   localTz, timeZones, plural, relTime,
 } from './common.js';
 import { createPicker } from './picker.js';
@@ -293,8 +293,8 @@ async function loadMine() {
     list.innerHTML = polls.map((p) => {
       const range = p.firstDay
         ? p.firstDay === p.lastDay
-          ? fmtDay(p.firstDay, { month: 'short', day: 'numeric' })
-          : `${fmtDay(p.firstDay, { month: 'short', day: 'numeric' })} – ${fmtDay(p.lastDay, { month: 'short', day: 'numeric' })}`
+          ? fmtDay(p.firstDay, { month: 'short', day: 'numeric', year: yearOpt(p.firstDay) })
+          : `${fmtDay(p.firstDay, { month: 'short', day: 'numeric', year: p.firstDay.slice(0, 4) !== p.lastDay.slice(0, 4) ? 'numeric' : undefined })} – ${fmtDay(p.lastDay, { month: 'short', day: 'numeric', year: yearOpt(p.lastDay) })}`
         : '';
       const status = p.decided
         ? `<span class="badge badge-good">${icon('check')}Decided</span>`

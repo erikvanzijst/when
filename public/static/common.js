@@ -208,6 +208,15 @@ export function fmtDay(day, opts) {
   return parseDay(day).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts });
 }
 
+// Options include the year only when it isn't the current one.
+export function yearOpt(day) {
+  return day.slice(0, 4) !== String(new Date().getFullYear()) ? 'numeric' : undefined;
+}
+
+export function fmtLongDay(day) {
+  return fmtDay(day, { weekday: 'long', month: 'long', day: 'numeric', year: yearOpt(day) });
+}
+
 export function todayStr() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;

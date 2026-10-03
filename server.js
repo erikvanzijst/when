@@ -757,7 +757,8 @@ function formatRange(first, last) {
   const fmt = (d, opts) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts });
   if (!first) return '';
   if (first === last) return fmt(first, { weekday: 'short', month: 'short', day: 'numeric' });
-  return `${fmt(first, { month: 'short', day: 'numeric' })} – ${fmt(last, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  const firstYear = first.slice(0, 4) !== last.slice(0, 4) ? 'numeric' : undefined;
+  return `${fmt(first, { month: 'short', day: 'numeric', year: firstYear })} – ${fmt(last, { month: 'short', day: 'numeric', year: 'numeric' })}`;
 }
 
 async function pollPage(req, res, slug) {

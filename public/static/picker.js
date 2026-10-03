@@ -1,6 +1,6 @@
 // Calendar + time-slot editor used by the composer and the edit dialog.
 
-import { icon, esc, fmtDay, dateTile, todayStr, parseDay, plural } from './common.js';
+import { icon, esc, fmtDay, fmtLongDay, dateTile, todayStr, parseDay, plural } from './common.js';
 
 let keySeq = 0;
 const nextKey = () => `k${++keySeq}`;
@@ -10,32 +10,82 @@ export function createPicker(root, { options = [], voteCounts = new Map(), onCha
   const today = todayStr();
   const first = items.length ? items.map((i) => i.day).sort()[0] : today;
   let cursor = { y: Number(first.slice(0, 4)), m: Number(first.slice(5, 7)) - 1 };
+  // 'days' is the normal month view; 'months' and 'years' are quick jumpers
+  // opened by clicking the month or year in the header.
+  let view = 'days';
+  let yearPage = cursor.y - 7;
+
+  const MONTHS = Array.from({ length: 12 }, (_, m) => new Date(Date.UTC(2000, m, 1)));
 
   root.classList.add('picker');
   root.innerHTML = `
     <div class="cal">
       <div class="cal-head">
-        <div class="cal-title" aria-live="polite"></div>
+        <div class="cal-title" aria-live="polite">
+          <button type="button" class="cal-title-btn" data-view="months" aria-haspopup="true"></button>
+          <button type="button" class="cal-title-btn" data-view="years" aria-haspopup="true"></button>
+        </div>
         <div class="cal-nav">
-          <button type="button" data-nav="-1" aria-label="Previous month">${icon('chevronLeft')}</button>
-          <button type="button" data-nav="1" aria-label="Next month">${icon('chevronRight')}</button>
+          <button type="button" data-nav="-1">${icon('chevronLeft')}</button>
+          <button type="button" data-nav="1">${icon('chevronRight')}</button>
         </div>
       </div>
-      <div class="cal-grid" role="grid"></div>
-      <div class="cal-hint">Click days to add or remove them.</div>
+      <div class="cal-grid"></div>
+      <div class="cal-foot">
+        <span class="cal-hint">Click days to add or remove them.</span>
+        <button type="button" class="cal-today" data-today hidden>Today</button>
+      </div>
     </div>
     <div class="slots"></div>`;
 
-  const calTitle = root.querySelector('.cal-title');
+  const monthBtn = root.querySelector('[data-view="months"]');
+  const yearBtn = root.querySelector('[data-view="years"]');
+  const prevBtn = root.querySelector('[data-nav="-1"]');
+  const nextBtn = root.querySelector('[data-nav="1"]');
   const grid = root.querySelector('.cal-grid');
+  const hint = root.querySelector('.cal-hint');
+  const todayBtn = root.querySelector('[data-today]');
   const slots = root.querySelector('.slots');
 
+  function setView(v) {
+    view = v;
+    if (v === 'years') yearPage = cursor.y - 7; // selected year sits in the third row
+    renderCal();
+    grid.querySelector('.is-current, [data-day]')?.focus({ preventScroll: true });
+  }
+
+  monthBtn.addEventListener('click', () => setView(view === 'months' ? 'days' : 'months'));
+  yearBtn.addEventListener('click', () => setView(view === 'years' ? 'days' : 'years'));
+
   root.querySelectorAll('[data-nav]').forEach((b) => b.addEventListener('click', () => {
-    cursor.m += Number(b.dataset.nav);
-    if (cursor.m < 0) { cursor.m = 11; cursor.y--; }
-    if (cursor.m > 11) { cursor.m = 0; cursor.y++; }
+    const dir = Number(b.dataset.nav);
+    if (view === 'days') {
+      cursor.m += dir;
+      if (cursor.m < 0) { cursor.m = 11; cursor.y--; }
+      if (cursor.m > 11) { cursor.m = 0; cursor.y++; }
+    } else if (view === 'months') {
+      cursor.y += dir;
+    } else {
+      yearPage += dir * 12;
+    }
     renderCal();
   }));
+
+  todayBtn.addEventListener('click', () => {
+    cursor = { y: Number(today.slice(0, 4)), m: Number(today.slice(5, 7)) - 1 };
+    view = 'days';
+    renderCal();
+  });
+
+  root.querySelector('.cal').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && view !== 'days') {
+      e.preventDefault();
+      e.stopPropagation(); // don't close an enclosing dialog
+      const opener = view === 'months' ? monthBtn : yearBtn;
+      setView('days');
+      opener.focus();
+    }
+  });
 
   function dayStr(y, m, d) {
     const dt = new Date(Date.UTC(y, m, d));
@@ -50,10 +100,48 @@ export function createPicker(root, { options = [], voteCounts = new Map(), onCha
 
   function renderCal() {
     const monthStart = new Date(Date.UTC(cursor.y, cursor.m, 1));
-    calTitle.textContent = monthStart.toLocaleDateString('en-US', { timeZone: 'UTC', month: 'long', year: 'numeric' });
+    monthBtn.textContent = monthStart.toLocaleDateString('en-US', { timeZone: 'UTC', month: 'long' });
+    yearBtn.textContent = String(cursor.y);
+    monthBtn.classList.toggle('is-open', view === 'months');
+    yearBtn.classList.toggle('is-open', view === 'years');
+    monthBtn.setAttribute('aria-expanded', String(view === 'months'));
+    yearBtn.setAttribute('aria-expanded', String(view === 'years'));
+    monthBtn.setAttribute('aria-label', `${monthBtn.textContent}, choose month`);
+    yearBtn.setAttribute('aria-label', `${cursor.y}, choose year`);
+    const unit = { days: 'month', months: 'year', years: '12 years' }[view];
+    prevBtn.setAttribute('aria-label', `Previous ${unit}`);
+    nextBtn.setAttribute('aria-label', `Next ${unit}`);
+    grid.className = `cal-grid ${view === 'days' ? '' : 'is-jump'}`;
     const thisMonth = today.slice(0, 7);
-    root.querySelector('[data-nav="-1"]').disabled = `${cursor.y}-${String(cursor.m + 1).padStart(2, '0')}` <= thisMonth;
+    todayBtn.hidden = view === 'days' && `${cursor.y}-${String(cursor.m + 1).padStart(2, '0')}` === thisMonth;
     const counts = countByDay();
+
+    if (view === 'months') {
+      hint.textContent = 'Pick a month.';
+      grid.setAttribute('role', 'listbox');
+      grid.innerHTML = MONTHS.map((d, m) => {
+        const key = `${cursor.y}-${String(m + 1).padStart(2, '0')}`;
+        const has = items.some((i) => i.day.startsWith(key));
+        const cls = ['cal-jump', m === cursor.m && 'is-current', key === thisMonth && 'is-today', has && 'has-dates'].filter(Boolean).join(' ');
+        return `<button type="button" class="${cls}" data-month="${m}" role="option" aria-selected="${m === cursor.m}">${d.toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short' })}</button>`;
+      }).join('');
+      return;
+    }
+
+    if (view === 'years') {
+      hint.textContent = `${yearPage} – ${yearPage + 11}`;
+      grid.setAttribute('role', 'listbox');
+      const thisYear = Number(today.slice(0, 4));
+      grid.innerHTML = Array.from({ length: 12 }, (_, i) => yearPage + i).map((y) => {
+        const has = items.some((it) => it.day.startsWith(`${y}-`));
+        const cls = ['cal-jump', y === cursor.y && 'is-current', y === thisYear && 'is-today', has && 'has-dates'].filter(Boolean).join(' ');
+        return `<button type="button" class="${cls}" data-year="${y}" role="option" aria-selected="${y === cursor.y}">${y}</button>`;
+      }).join('');
+      return;
+    }
+
+    hint.textContent = 'Click days to add or remove them.';
+    grid.setAttribute('role', 'grid');
     // Weeks start on Monday.
     const offset = (monthStart.getUTCDay() + 6) % 7;
     const cells = [];
@@ -64,18 +152,28 @@ export function createPicker(root, { options = [], voteCounts = new Map(), onCha
       if (i >= 35 && dt.getUTCMonth() !== cursor.m) break;
       const outside = dt.getUTCMonth() !== cursor.m;
       const n = counts.get(ds) || 0;
-      const past = ds < today && !n;
-      const cls = ['cal-day', outside && 'is-outside', past && 'is-past', ds === today && 'is-today', n && 'is-selected'].filter(Boolean).join(' ');
-      const label = `${fmtDay(ds, { weekday: 'long', month: 'long', day: 'numeric' })}${n ? ', selected' : ''}`;
-      cells.push(`<button type="button" class="${cls}" data-day="${ds}" aria-pressed="${!!n}" aria-label="${esc(label)}" ${past ? 'disabled' : ''}>
+      const cls = ['cal-day', outside && 'is-outside', ds < today && 'is-past', ds === today && 'is-today', n && 'is-selected'].filter(Boolean).join(' ');
+      const label = `${fmtDay(ds, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}${n ? ', selected' : ''}`;
+      cells.push(`<button type="button" class="${cls}" data-day="${ds}" aria-pressed="${!!n}" aria-label="${esc(label)}">
         ${dt.getUTCDate()}${n > 1 ? `<span class="count">${n}</span>` : ''}</button>`);
     }
     grid.innerHTML = cells.join('');
   }
 
   grid.addEventListener('click', (e) => {
+    const month = e.target.closest('[data-month]');
+    if (month) {
+      cursor.m = Number(month.dataset.month);
+      return setView('days');
+    }
+    const year = e.target.closest('[data-year]');
+    if (year) {
+      cursor.y = Number(year.dataset.year);
+      // Year first, then month: the natural way to jump far.
+      return setView('months');
+    }
     const btn = e.target.closest('[data-day]');
-    if (!btn || btn.disabled) return;
+    if (!btn) return;
     const day = btn.dataset.day;
     if (items.some((i) => i.day === day)) {
       items = items.filter((i) => i.day !== day);
@@ -116,7 +214,7 @@ export function createPicker(root, { options = [], voteCounts = new Map(), onCha
       html.push(`<div class="slot-day" data-day-card="${day}">
         ${dateTile(day)}
         <div class="slot-body">
-          <div class="slot-title">${esc(fmtDay(day, { weekday: 'long', month: 'long', day: 'numeric', year: day.slice(0, 4) !== today.slice(0, 4) ? 'numeric' : undefined }))}</div>
+          <div class="slot-title">${esc(fmtLongDay(day))}</div>
           ${rows}
           ${allDayOnly ? '' : `<div class="slot-row"><button type="button" class="chip-btn" data-add-slot="${day}">${icon('plus')}Another time</button></div>`}
         </div>
