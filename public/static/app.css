@@ -189,6 +189,8 @@ img, svg { display: block; }
 .btn-sm { height: 32px; padding: 0 12px; font-size: 13px; border-radius: 8px; }
 .btn-icon { width: 40px; padding: 0; }
 .btn.is-done { --btn-bg: var(--good-soft); --btn-fg: var(--good); --btn-border: transparent; }
+.btn.is-on { --btn-bg: var(--accent-softer); --btn-fg: var(--accent-ink); --btn-border: color-mix(in oklab, var(--accent) 35%, var(--line)); }
+.btn.is-on:hover { --btn-bg: var(--accent-soft); border-color: color-mix(in oklab, var(--accent) 45%, var(--line)); }
 
 /* Avatars ---------------------------------------------------------------- */
 
@@ -630,3 +632,9 @@ dialog[open] { animation: dialog-in .2s ease-out; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
 }
+
+/* Message pages (unsubscribe etc.) ---------------------------------------- */
+
+.message p { max-width: 30em; margin: 0 auto 24px; line-height: 1.6; }
+.message form { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.message > .btn + .btn { margin-left: 10px; }

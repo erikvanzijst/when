@@ -18,6 +18,7 @@ let justCreated = sessionStorage.getItem('when:new') === slug;
 sessionStorage.removeItem('when:new');
 let lastToggled = null;
 let headSig = '';
+let watch = null; // { watching, email } for the signed-in viewer
 
 app.innerHTML = `
   <div class="poll-head">
@@ -150,6 +151,7 @@ function renderHead() {
     </div>
     <div class="poll-actions">
       <button type="button" class="btn btn-primary" data-share>${icon('link')}<span>Copy link</span></button>
+      <button type="button" class="btn" data-watch aria-pressed="false"></button>
       ${isOwner() ? `
         <div class="user-menu">
           <button type="button" class="btn" data-manage aria-haspopup="menu" aria-expanded="false">Manage ${icon('chevronDown')}</button>
@@ -165,6 +167,8 @@ function renderHead() {
         </div>` : ''}
     </div>`;
   head.querySelector('[data-share]').addEventListener('click', (e) => share(e.currentTarget));
+  head.querySelector('[data-watch]').addEventListener('click', toggleWatch);
+  renderWatch();
   if (isOwner()) {
     bindMenu(head.querySelector('[data-manage]'), head.querySelector('[data-manage] + .menu'));
     head.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', () => ownerAction(b.dataset.act)));
@@ -363,6 +367,45 @@ async function save() {
     renderOptions();
   } finally {
     saving = false;
+  }
+}
+
+// --- Watching --------------------------------------------------------------
+
+function renderWatch() {
+  const btn = app.querySelector('[data-watch]');
+  if (!btn) return;
+  const on = !!watch?.watching;
+  btn.classList.toggle('is-on', on);
+  btn.setAttribute('aria-pressed', String(on));
+  btn.innerHTML = on ? `${icon('bellRing')}<span>Watching</span>` : `${icon('bell')}<span>Email me updates</span>`;
+  btn.title = on
+    ? `You get an email at ${watch.email} when people vote. Click to stop.`
+    : 'Get an email when people vote';
+}
+
+async function loadWatch() {
+  if (!me.user) return;
+  try {
+    watch = await api('GET', `/api/polls/${encodeURIComponent(slug)}/watch`);
+    renderWatch();
+  } catch { /* the button just stays in its default state */ }
+}
+
+async function toggleWatch() {
+  if (!me.user) return signIn();
+  const next = !watch?.watching;
+  const prev = watch;
+  watch = { ...(watch || {}), watching: next };
+  renderWatch();
+  try {
+    watch = await api('PUT', `/api/polls/${encodeURIComponent(slug)}/watch`, { watching: next });
+    renderWatch();
+    toast(next ? `We’ll email ${watch.email} when people vote` : 'You won’t get emails about this datepicker');
+  } catch (err) {
+    watch = prev;
+    renderWatch();
+    if (err.status !== 401) toast(err.message, { type: 'error' });
   }
 }
 
@@ -565,6 +608,7 @@ function openDelete() {
 try {
   setState(await api('GET', `/api/polls/${encodeURIComponent(slug)}`));
   connect();
+  loadWatch();
 } catch (err) {
   if (err.status === 404) renderMissing('This datepicker doesn’t exist', 'It may have been deleted, or the link has a typo.');
   else if (err.status !== 401) renderMissing('Something went wrong', err.message);

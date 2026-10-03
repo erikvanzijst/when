@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { Pool } = require('pg');
 const og = require('./og');
+const notify = require('./notify');
 
 const PORT = Number(process.env.PORT || 8080);
 const DEV_AUTH = process.env.DEV_AUTH === '1';
@@ -66,6 +67,7 @@ async function migrate() {
     CREATE INDEX IF NOT EXISTS votes_poll_idx ON votes (poll_id);
     CREATE INDEX IF NOT EXISTS votes_user_idx ON votes (user_id);
   `);
+  await notify.migrate(pool);
 }
 
 async function tx(fn) {
@@ -96,7 +98,7 @@ class HttpError extends Error {
 
 const RESERVED_SLUGS = new Set([
   'api', 'healthz', 'static', 'assets', 'new', 'me', 'dev', 'login', 'logout',
-  'favicon.ico', 'robots.txt', 'about', 'admin', 'settings', 'og', 'avatar',
+  'favicon.ico', 'robots.txt', 'about', 'admin', 'settings', 'og', 'avatar', 'unsubscribe',
 ]);
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -514,6 +516,7 @@ const api = {
           [p.id, o.day, o.start, o.end],
         );
       }
+      await notify.setWatching(db, p.id, user.id, true); // creators watch by default
       return p;
     });
     if (!created) {
@@ -550,6 +553,7 @@ const api = {
         );
         if (rowCount !== ids.length) throw new HttpError(409, 'One of those options no longer exists.');
       }
+      const { rows: prev } = await db.query('SELECT option_id FROM votes WHERE poll_id = $1 AND user_id = $2', [p.id, user.id]);
       await db.query(
         'DELETE FROM votes WHERE poll_id = $1 AND user_id = $2 AND NOT (option_id = ANY($3::bigint[]))',
         [p.id, user.id, ids],
@@ -562,6 +566,7 @@ const api = {
           [p.id, user.id, ids],
         );
       }
+      await notify.recordChange(db, p.id, user.id, prev.map((r) => r.option_id), ids);
       await bumpVersion(db, p.id);
       return p.id;
     });
@@ -648,6 +653,27 @@ const api = {
     });
     notifyChanged(pollId);
     sendJson(res, 200, await loadPollState(pool, 'id', pollId));
+  },
+
+  async getWatch(req, res, url, slug) {
+    const user = requireUser(req);
+    const { rows: [p] } = await pool.query('SELECT id FROM polls WHERE slug = $1', [slug]);
+    if (!p) throw new HttpError(404, 'Datepicker not found.');
+    sendJson(res, 200, { watching: await notify.isWatching(pool, p.id, user.id), email: user.email });
+  },
+
+  async putWatch(req, res, url, slug) {
+    const user = requireUser(req);
+    const body = await readJson(req);
+    if (typeof body.watching !== 'boolean') throw new HttpError(400, 'Expected { watching: boolean }.');
+    if (body.watching && !user.email) throw new HttpError(409, 'Your account has no email address to notify.');
+    await tx(async (db) => {
+      await upsertUser(db, user);
+      const { rows: [p] } = await db.query('SELECT id FROM polls WHERE slug = $1', [slug]);
+      if (!p) throw new HttpError(404, 'Datepicker not found.');
+      await notify.setWatching(db, p.id, user.id, body.watching);
+    });
+    sendJson(res, 200, { watching: body.watching, email: user.email });
   },
 
   async remove(req, res, url, slug) {
@@ -788,6 +814,61 @@ async function pollPage(req, res, slug) {
 }
 
 // ---------------------------------------------------------------------------
+// Unsubscribe
+//
+// GET shows a confirmation page and changes nothing, because mail scanners
+// prefetch links. POST unsubscribes: from that page's button, or directly from
+// mail clients implementing RFC 8058 one-click (List-Unsubscribe-Post).
+// ---------------------------------------------------------------------------
+
+function messagePage(req, { title, heading, body }) {
+  return renderPage('message.html', req, { title: `${title} · When`, description: SITE_DESCRIPTION, path: '/', ...HOME_IMAGE })
+    .replace('{{HEADING}}', heading)
+    .replace('{{BODY}}', body);
+}
+
+async function unsubscribe(req, res, token) {
+  const parsed = notify.parseUnsubscribeToken(token);
+  const { rows: [p] } = parsed
+    ? await pool.query('SELECT id, slug, title FROM polls WHERE id = $1', [parsed.pollId])
+    : { rows: [] };
+  if (!p) {
+    if (req.method === 'POST') { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Not found'); }
+    return sendPage(res, 404, messagePage(req, {
+      title: 'Link expired', heading: 'This link no longer works',
+      body: '<p>The datepicker may have been deleted. You won’t get any more emails about it.</p><a class="btn btn-primary" href="/">Go to When</a>',
+    }));
+  }
+  const title = escapeHtml(p.title);
+  const pollLink = `<a class="btn" href="/${escapeHtml(p.slug)}">Open datepicker</a>`;
+
+  if (req.method === 'POST') {
+    await notify.setWatching(pool, p.id, parsed.userId, false);
+    console.log(`unsubscribed: ${parsed.userId} from ${p.slug}`);
+    const oneClick = String(req.headers['content-type'] || '').includes('application/x-www-form-urlencoded')
+      && !String(req.headers.accept || '').includes('text/html');
+    if (oneClick) { res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end('Unsubscribed'); }
+    return sendPage(res, 200, messagePage(req, {
+      title: 'Unsubscribed', heading: 'You’ve stopped watching',
+      body: `<p>No more emails about <strong>${title}</strong>. You can turn them back on from the datepicker at any time.</p>${pollLink}`,
+    }));
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD') throw new HttpError(405, 'Method not allowed.');
+
+  if (!(await notify.isWatching(pool, p.id, parsed.userId))) {
+    return sendPage(res, 200, messagePage(req, {
+      title: 'Not watching', heading: 'You’re not watching this one',
+      body: `<p>You don’t get emails about <strong>${title}</strong>.</p>${pollLink}`,
+    }));
+  }
+  sendPage(res, 200, messagePage(req, {
+    title: 'Stop watching', heading: 'Stop email updates?',
+    body: `<p>You’ll no longer get an email when people vote on <strong>${title}</strong>.</p>
+      <form method="post"><button class="btn btn-primary" type="submit">Stop watching</button> ${pollLink}</form>`,
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -816,6 +897,8 @@ async function route(req, res) {
           if (method === 'DELETE') return api.remove(req, res, url, slug);
         }
         if (parts.length === 4 && parts[3] === 'votes' && method === 'PUT') return api.vote(req, res, url, slug);
+        if (parts.length === 4 && parts[3] === 'watch' && method === 'GET') return api.getWatch(req, res, url, slug);
+        if (parts.length === 4 && parts[3] === 'watch' && method === 'PUT') return api.putWatch(req, res, url, slug);
         if (parts.length === 4 && parts[3] === 'events' && method === 'GET') return handleEvents(req, res, slug);
       }
     }
@@ -837,6 +920,9 @@ async function route(req, res) {
     res.writeHead(302, { 'Set-Cookie': 'dev_user=; Path=/; Max-Age=0', Location: url.searchParams.get('rd') || '/' });
     return res.end();
   }
+
+  const unsubMatch = /^\/unsubscribe\/([^/]+)$/.exec(pathname);
+  if (unsubMatch) return unsubscribe(req, res, unsubMatch[1]);
 
   if (method !== 'GET' && method !== 'HEAD') throw new HttpError(405, 'Method not allowed.');
 
@@ -893,6 +979,7 @@ migrate()
   .then(() => {
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`when listening on 0.0.0.0:${PORT}${DEV_AUTH ? ' (DEV_AUTH)' : ''}`);
+      notify.start({ pool, loadPollState, gravatarHash });
     });
   })
   .catch((err) => {
