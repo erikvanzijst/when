@@ -96,7 +96,7 @@ class HttpError extends Error {
 
 const RESERVED_SLUGS = new Set([
   'api', 'healthz', 'static', 'assets', 'new', 'me', 'dev', 'login', 'logout',
-  'favicon.ico', 'robots.txt', 'about', 'admin', 'settings', 'og',
+  'favicon.ico', 'robots.txt', 'about', 'admin', 'settings', 'og', 'avatar',
 ]);
 const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -853,6 +853,14 @@ async function route(req, res) {
     return sendPage(res, 200, renderPage('index.html', req, {
       title: 'When — find the date that works for everyone', description: SITE_DESCRIPTION, path: '/', ...HOME_IMAGE,
     }));
+  }
+
+  // /avatar/AS-3.png: initials + tone index. Used as Gravatar's fallback in emails.
+  const avatarMatch = /^\/avatar\/([A-Z0-9]{1,2})-([0-7])\.png$/.exec(pathname);
+  if (avatarMatch) {
+    const png = await og.initialsAvatar(avatarMatch[1], Number(avatarMatch[2]));
+    res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length, 'Cache-Control': 'public, max-age=604800, immutable' });
+    return res.end(req.method === 'HEAD' ? undefined : png);
   }
 
   const ogMatch = /^\/og\/([a-z0-9-]+)\.png$/.exec(pathname);

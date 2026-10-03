@@ -246,7 +246,33 @@ async function cached(key, build) {
   return png;
 }
 
+// Initials avatars as PNG, for email clients (which can't run the site's JS
+// fallback). Tones and mixing mirror the .avatar styles in app.css.
+const AVATAR_TONES = ['#b4532a', '#8a6f2f', '#5b7a3a', '#2f7466', '#3d6a8f', '#6a5a9b', '#9b4f78', '#7a6656'];
+
+function mix(hexA, hexB, weightA) {
+  const a = hexA.match(/\w\w/g).map((x) => parseInt(x, 16));
+  const b = hexB.match(/\w\w/g).map((x) => parseInt(x, 16));
+  return `#${a.map((v, i) => Math.round(v * weightA + b[i] * (1 - weightA)).toString(16).padStart(2, '0')).join('')}`;
+}
+
+async function initialsAvatar(text, tone) {
+  const color = AVATAR_TONES[tone % AVATAR_TONES.length];
+  const size = 128;
+  satoriPromise ??= import('satori').then((m) => m.default);
+  const satori = await satoriPromise;
+  const tree = h('div', {
+    width: size, height: size, borderRadius: size, alignItems: 'center', justifyContent: 'center',
+    background: mix(color, C.surface, 0.2), color: mix(color, C.ink, 0.8),
+    fontFamily: 'Inter', fontWeight: 600, fontSize: text.length > 1 ? 50 : 58, letterSpacing: 1,
+  }, text);
+  const svg = await satori(tree, { width: size, height: size, fonts: loadFonts() });
+  return new Resvg(svg).render().asPng();
+}
+
 module.exports = {
+  AVATAR_TONES,
+  initialsAvatar: (text, tone) => cached(`avatar:${text}:${tone}`, () => initialsAvatar(text, tone)),
   OG_WIDTH: W,
   OG_HEIGHT: H,
   pollImage: (poll, host) => cached(`poll:${poll.slug}:${poll.version}`, () => render(pollTree(poll, host))),
