@@ -573,7 +573,7 @@ dialog[open] { animation: dialog-in .2s ease-out; }
 .option.is-votable:hover { border-color: var(--line-strong); box-shadow: var(--shadow); }
 .option.is-mine { border-color: color-mix(in oklab, var(--accent) 55%, var(--line)); background: var(--accent-softer); }
 .option.is-final { border-color: color-mix(in oklab, var(--good) 55%, transparent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--good) 14%, transparent); }
-.option-main { min-width: 0; display: grid; gap: 8px; }
+.option-main { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 .option-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .option-label { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
 .option-label .when { font-weight: 600; font-size: 15.5px; }
