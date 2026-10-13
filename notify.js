@@ -1,6 +1,7 @@
 'use strict';
 
-// Vote-notification emails.
+// Notification emails: vote updates for watchers, and the final date (with a
+// calendar invite) for everyone involved once the owner decides.
 //
 // Freepod has no workers or schedulers, so pending notifications live in
 // Postgres and this process sends them from an in-process ticker. Each vote
@@ -13,7 +14,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const nodemailer = require('nodemailer');
-const { renderVoteEmail } = require('./emails');
+const { renderVoteEmail, renderDecisionEmail } = require('./emails');
+const { calendarEvent, googleCalendarUrl } = require('./ics');
 
 function freepodHostname() {
   try {
@@ -35,6 +37,7 @@ const config = {
   appUrl: (env.APP_URL || (freepodHostname() ? `https://${freepodHostname()}` : `http://localhost:${env.PORT || 8080}`)).replace(/\/$/, ''),
   debounceSeconds: Number(env.NOTIFY_DEBOUNCE_SECONDS || 60),
   maxDelaySeconds: Number(env.NOTIFY_MAX_DELAY_SECONDS || 300),
+  decisionDelaySeconds: Number(env.DECISION_DELAY_SECONDS || 60),
   tickMs: 10_000,
   maxAttempts: 5,
   outbox: path.join(__dirname, 'var', 'outbox'),
@@ -71,6 +74,21 @@ async function migrate(db) {
       PRIMARY KEY (poll_id, voter_id)
     );
     CREATE INDEX IF NOT EXISTS vote_notifications_due_idx ON vote_notifications (due_at);
+    CREATE TABLE IF NOT EXISTS decision_notifications (
+      poll_id     bigint PRIMARY KEY REFERENCES polls(id) ON DELETE CASCADE,
+      sequence    int NOT NULL DEFAULT 0, -- iCalendar SEQUENCE of the latest decision
+      due_at      timestamptz,            -- set while emails are pending
+      lease_until timestamptz,
+      attempts    int NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS decision_notifications_due_idx ON decision_notifications (due_at) WHERE due_at IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS decision_recipients (
+      poll_id bigint NOT NULL REFERENCES polls(id) ON DELETE CASCADE,
+      user_id text NOT NULL REFERENCES users(id),
+      event   text NOT NULL, -- eventKey() of the date they were last sent
+      sent_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (poll_id, user_id)
+    );
   `);
 
   // One-time: creators of polls that predate notifications start out watching.
@@ -128,6 +146,36 @@ async function recordChange(db, pollId, voterId, before, after) {
   );
 }
 
+// Called inside the update transaction whenever the owner picks the final date.
+// The short delay lets an owner who misclicked change the pick, or reopen, before
+// anyone is emailed; only the date standing when it expires is sent.
+async function recordDecision(db, pollId) {
+  await db.query(
+    `INSERT INTO decision_notifications (poll_id, sequence, due_at)
+     VALUES ($1, 1, now() + make_interval(secs => $2))
+     ON CONFLICT (poll_id) DO UPDATE
+       SET sequence = decision_notifications.sequence + 1, due_at = EXCLUDED.due_at, lease_until = NULL, attempts = 0`,
+    [pollId, config.decisionDelaySeconds],
+  );
+}
+
+async function decisionSequence(db, pollId) {
+  const { rows: [r] } = await db.query('SELECT sequence FROM decision_notifications WHERE poll_id = $1', [pollId]);
+  return r ? r.sequence : 0;
+}
+
+// Identifies what a recipient's calendar holds, so an unchanged date is not sent
+// twice and a moved one is reported as a change.
+function eventKey(option, tz) {
+  return [option.day, option.start || '', option.end || '', option.start ? tz : ''].join('|');
+}
+
+function parseEventKey(key) {
+  if (!key) return null;
+  const [day, start, end] = key.split('|');
+  return { day, start: start || null, end: end || null };
+}
+
 // --- Unsubscribe tokens --------------------------------------------------------
 
 const b64 = (s) => Buffer.from(s).toString('base64url');
@@ -162,13 +210,17 @@ function makeTransport() {
     });
   }
   if (config.transport === 'file') {
-    // Local development: write each message to var/outbox/ instead of sending.
+    // Local development: write each message to var/outbox/ instead of sending,
+    // as the full .eml (open it in a mail client) plus its HTML and calendar parts.
+    const composer = nodemailer.createTransport({ streamTransport: true, buffer: true });
     return {
       async sendMail(msg) {
         fs.mkdirSync(config.outbox, { recursive: true });
         const base = `${new Date().toISOString().replace(/[:.]/g, '-')}-${String(msg.to.address).replace(/[^\w.@-]/g, '_')}`;
+        const { message } = await composer.sendMail(msg);
+        fs.writeFileSync(path.join(config.outbox, `${base}.eml`), message);
         fs.writeFileSync(path.join(config.outbox, `${base}.html`), msg.html);
-        fs.writeFileSync(path.join(config.outbox, `${base}.json`), JSON.stringify({ ...msg, html: undefined }, null, 2));
+        if (msg.icalEvent) fs.writeFileSync(path.join(config.outbox, `${base}.ics`), msg.icalEvent.content);
         return { messageId: base };
       },
     };
@@ -267,11 +319,133 @@ async function processPoll(pollId, claims) {
   if (sent || failed) console.log(`notify: ${poll.slug}: ${changes.length} change(s), ${sent} email(s) sent, ${failed} failed`);
 }
 
+// --- Decisions -------------------------------------------------------------------
+
+function calendarHost() {
+  return new URL(config.appUrl).hostname;
+}
+
+// The poll's .ics as it stands, for the email and the download endpoint alike.
+function pollCalendar(poll, option, sequence) {
+  return calendarEvent({ poll, option, sequence, url: `${config.appUrl}/${poll.slug}`, host: calendarHost() });
+}
+
+async function sendDecision(recipient, poll, final, { previous, sequence }) {
+  const pollUrl = `${config.appUrl}/${poll.slug}`;
+  const email = renderDecisionEmail({
+    poll,
+    final,
+    previous,
+    recipient,
+    pollUrl,
+    baseUrl: config.appUrl,
+    googleUrl: googleCalendarUrl({ poll, option: final, url: pollUrl }),
+    icsUrl: `${config.appUrl}/api/polls/${poll.slug}/event.ics`,
+  });
+  await transporter.sendMail({
+    from: config.from,
+    to: { name: recipient.name, address: recipient.email },
+    subject: email.subject,
+    text: email.text,
+    html: email.html,
+    // Added both as a text/calendar alternative (which Gmail and others turn
+    // into an "add to calendar" card) and as an .ics attachment.
+    icalEvent: { method: 'PUBLISH', filename: `${poll.slug}.ics`, content: pollCalendar(poll, final, sequence) },
+    headers: {
+      'Auto-Submitted': 'auto-generated',
+      'X-Auto-Response-Suppress': 'All',
+    },
+  });
+}
+
+async function processDecision(claim) {
+  const done = () => pool.query(
+    // Unless the owner decided again meanwhile, which set a new due time.
+    'UPDATE decision_notifications SET due_at = NULL, lease_until = NULL, attempts = 0 WHERE poll_id = $1 AND due_at = $2::timestamptz',
+    [claim.poll_id, claim.due_at],
+  );
+  const poll = await loadPollState(pool, 'id', claim.poll_id);
+  if (!poll) return;
+  const final = poll.closed && poll.options.find((o) => o.id === poll.finalOptionId);
+  if (!final) return done(); // reopened before the emails went out
+
+  // Everyone who voted, the owner, and anyone sent an earlier date who has since
+  // withdrawn (their calendar still holds it). Those already holding this exact
+  // date are skipped, so a retry or a re-confirmed pick sends nothing twice.
+  const key = eventKey(final, poll.tz);
+  const { rows: recipients } = await pool.query(
+    `SELECT u.id, u.name, u.email, r.event AS previous
+       FROM users u
+       LEFT JOIN decision_recipients r ON r.poll_id = $1 AND r.user_id = u.id
+      WHERE u.email <> ''
+        AND (u.id = $2 OR r.user_id IS NOT NULL OR u.id IN (SELECT user_id FROM votes WHERE poll_id = $1))
+        AND r.event IS DISTINCT FROM $3
+      ORDER BY u.id`,
+    [poll.id, poll.owner.id, key],
+  );
+
+  let sent = 0;
+  let failed = 0;
+  for (const r of recipients) {
+    try {
+      await sendDecision(r, poll, final, { previous: parseEventKey(r.previous), sequence: claim.sequence });
+      await pool.query(
+        `INSERT INTO decision_recipients (poll_id, user_id, event) VALUES ($1, $2, $3)
+         ON CONFLICT (poll_id, user_id) DO UPDATE SET event = EXCLUDED.event, sent_at = now()`,
+        [poll.id, r.id, key],
+      );
+      sent++;
+    } catch (err) {
+      failed++;
+      console.error(`notify: decision email to ${r.id} for poll ${poll.slug} failed: ${err.message}`);
+    }
+  }
+  if (sent || failed) console.log(`notify: ${poll.slug}: final date ${key}, ${sent} email(s) sent, ${failed} failed`);
+
+  if (failed && claim.attempts < config.maxAttempts) {
+    // Retry later; whoever did get it is recorded and won't be emailed again.
+    await pool.query(
+      'UPDATE decision_notifications SET lease_until = now() + make_interval(mins => $2) WHERE poll_id = $1 AND due_at = $3::timestamptz',
+      [poll.id, claim.attempts, claim.due_at],
+    );
+    return;
+  }
+  await done();
+}
+
+async function flushDecisions() {
+  const { rows } = await pool.query(
+    `UPDATE decision_notifications n
+        SET lease_until = now() + interval '2 minutes', attempts = n.attempts + 1
+       FROM (SELECT poll_id FROM decision_notifications
+              WHERE due_at <= now() AND (lease_until IS NULL OR lease_until < now())
+              ORDER BY due_at
+              LIMIT 20
+              FOR UPDATE SKIP LOCKED) due
+      WHERE n.poll_id = due.poll_id
+      RETURNING n.poll_id, n.sequence, n.due_at::text AS due_at, n.attempts`,
+  );
+  for (const claim of rows) {
+    try {
+      await processDecision(claim);
+    } catch (err) {
+      console.error(`notify: decision for poll ${claim.poll_id} failed:`, err);
+    }
+  }
+}
+
+// --- Ticker ----------------------------------------------------------------------
+
 let flushing = false;
 
 async function flush() {
   if (flushing || !transporter) return;
   flushing = true;
+  try {
+    await flushDecisions();
+  } catch (err) {
+    console.error('notify: decision flush failed:', err.message);
+  }
   try {
     const { rows } = await pool.query(
       `UPDATE vote_notifications n
@@ -307,12 +481,13 @@ function start(deps) {
   ({ pool, loadPollState, gravatarHash } = deps);
   transporter = makeTransport();
   const where = config.transport === 'smtp' ? `smtp://${config.smtpHost}:${config.smtpPort}` : config.transport;
-  console.log(`notify: ${where}, from ${config.from}, links to ${config.appUrl}, debounce ${config.debounceSeconds}s (max ${config.maxDelaySeconds}s)`);
+  console.log(`notify: ${where}, from ${config.from}, links to ${config.appUrl}, debounce ${config.debounceSeconds}s (max ${config.maxDelaySeconds}s), decisions after ${config.decisionDelaySeconds}s`);
   if (!transporter) return;
   flush();
   setInterval(flush, config.tickMs).unref();
 }
 
 module.exports = {
-  config, migrate, start, flush, recordChange, isWatching, setWatching, unsubscribeToken, parseUnsubscribeToken,
+  config, migrate, start, flush, recordChange, recordDecision, decisionSequence, pollCalendar,
+  isWatching, setWatching, unsubscribeToken, parseUnsubscribeToken,
 };

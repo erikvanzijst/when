@@ -158,9 +158,9 @@ function renderHead() {
           <div class="menu" role="menu" hidden style="left:0;right:auto;transform-origin:top left">
             <button class="menu-item" role="menuitem" data-act="edit">${icon('edit')}Edit details & dates</button>
             ${state.closed
-              ? `<button class="menu-item" role="menuitem" data-act="reopen">${icon('unlock')}Reopen voting</button>`
-              : `<button class="menu-item" role="menuitem" data-act="close">${icon('lock')}Close voting</button>`}
-            ${state.finalOptionId ? `<button class="menu-item" role="menuitem" data-act="unfinal">${icon('x')}Clear final date</button>` : ''}
+              ? `<button class="menu-item" role="menuitem" data-act="decide">${icon('flag')}${state.finalOptionId ? 'Change final date' : 'Pick final date'}</button>
+                 <button class="menu-item" role="menuitem" data-act="reopen">${icon('unlock')}Reopen voting</button>`
+              : `<button class="menu-item" role="menuitem" data-act="decide">${icon('lock')}Close voting & pick date</button>`}
             <div class="menu-sep"></div>
             <button class="menu-item danger" role="menuitem" data-act="delete">${icon('trash')}Delete datepicker</button>
           </div>
@@ -184,15 +184,20 @@ function renderBanner() {
   if (final) {
     html = `<div class="banner banner-final">${icon('party')}
       <div class="grow"><span>It’s decided</span><span class="final-date">${esc(fmtLongDay(final.day))}${final.start ? ` · ${esc(fmtTimeRange(final.start, final.end))}` : ''}</span></div>
-      <button type="button" class="btn" data-ics>${icon('download')}Add to calendar</button>
+      <a class="btn" href="/api/polls/${encodeURIComponent(slug)}/event.ics" download>${icon('download')}Add to calendar</a>
     </div>`;
   } else if (justCreated && isOwner()) {
     html = `<div class="banner banner-accent">${icon('party')}
       <div class="grow"><strong>Your datepicker is ready.</strong> Share the link so people can vote. Results appear here as they come in.</div>
       <button type="button" class="btn btn-primary" data-share>${icon('link')}<span>Copy link</span></button>
     </div>`;
+  } else if (state.closed && isOwner()) {
+    html = `<div class="banner banner-accent">${icon('lock')}
+      <div class="grow"><strong>Voting is closed.</strong> Pick the final date and everyone gets an email with a calendar invite.</div>
+      <button type="button" class="btn btn-primary" data-decide>${icon('flag')}Pick final date</button>
+    </div>`;
   } else if (state.closed) {
-    html = `<div class="banner">${icon('lock')}<div class="grow"><strong>Voting is closed.</strong> ${isOwner() ? 'Reopen it from Manage if people still need to respond.' : 'The results below are final.'}</div></div>`;
+    html = `<div class="banner">${icon('lock')}<div class="grow"><strong>Voting is closed.</strong> The results below are final.</div></div>`;
   } else if (!me.user) {
     html = `<div class="banner banner-accent">${icon('info')}
       <div class="grow"><strong>Which dates work for you?</strong> Sign in to add your vote. It only takes a moment.</div>
@@ -200,7 +205,7 @@ function renderBanner() {
     </div>`;
   }
   el.innerHTML = html;
-  el.querySelector('[data-ics]')?.addEventListener('click', () => downloadIcs(final));
+  el.querySelector('[data-decide]')?.addEventListener('click', () => openDecide());
   el.querySelector('[data-share]')?.addEventListener('click', (e) => share(e.currentTarget));
 
   if (state.closed) hint.textContent = '';
@@ -278,17 +283,18 @@ function renderOptions() {
       : `<span class="names">No votes yet</span>`;
 
     const side = el.querySelector('[data-side]');
-    if (isOwner()) {
-      if (!side.firstChild) {
+    if (isOwner() && !isFinal) {
+      if (!side.querySelector('[data-opt-menu]')) {
         side.innerHTML = `<div class="user-menu">
           <button type="button" class="icon-btn" data-opt-menu aria-label="Option actions" aria-haspopup="menu">${icon('more')}</button>
-          <div class="menu" role="menu" hidden></div>
+          <div class="menu" role="menu" hidden>
+            <button class="menu-item" role="menuitem" data-final="${o.id}">${icon('flag')}Choose as final date</button>
+          </div>
         </div>`;
         bindMenu(side.querySelector('[data-opt-menu]'), side.querySelector('.menu'));
       }
-      side.querySelector('.menu').innerHTML = isFinal
-        ? `<button class="menu-item" role="menuitem" data-final="">${icon('x')}Remove final mark</button>`
-        : `<button class="menu-item" role="menuitem" data-final="${o.id}">${icon('flag')}Choose as final date</button>`;
+    } else if (isOwner()) {
+      side.innerHTML = '<span class="icon-btn-space"></span>'; // keeps the bar aligned with the other rows
     } else {
       side.innerHTML = '';
     }
@@ -322,8 +328,7 @@ function renderRespondents() {
 function onOptionClick(e) {
   const finalBtn = e.target.closest('[data-final]');
   if (finalBtn) {
-    const id = finalBtn.dataset.final || null;
-    patch(id ? { finalOptionId: id, closed: true } : { finalOptionId: null }, id ? 'Final date chosen. Voting is now closed.' : 'Final mark removed');
+    openDecide(finalBtn.dataset.final);
     return;
   }
   if (e.target.closest('.option-side')) return;
@@ -453,39 +458,6 @@ async function share(button) {
   }, 2000);
 }
 
-// --- Calendar export -------------------------------------------------------
-
-function downloadIcs(o) {
-  const e = (s) => String(s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
-  const d = o.day.replace(/-/g, '');
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
-  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//When//Datepicker//EN', 'CALSCALE:GREGORIAN', 'BEGIN:VEVENT',
-    `UID:${slug}-${o.id}@${location.host}`, `DTSTAMP:${stamp}`];
-  if (!o.start) {
-    const next = new Date(`${o.day}T00:00:00Z`);
-    next.setUTCDate(next.getUTCDate() + 1);
-    lines.push(`DTSTART;VALUE=DATE:${d}`, `DTEND;VALUE=DATE:${next.toISOString().slice(0, 10).replace(/-/g, '')}`);
-  } else {
-    lines.push(`DTSTART;TZID=${state.tz}:${d}T${o.start.replace(':', '')}00`);
-    if (o.end) {
-      const endDay = new Date(`${o.day}T00:00:00Z`);
-      if (o.end < o.start) endDay.setUTCDate(endDay.getUTCDate() + 1);
-      lines.push(`DTEND;TZID=${state.tz}:${endDay.toISOString().slice(0, 10).replace(/-/g, '')}T${o.end.replace(':', '')}00`);
-    } else {
-      lines.push('DURATION:PT1H');
-    }
-  }
-  lines.push(`SUMMARY:${e(state.title)}`, `URL:${location.origin}/${slug}`);
-  if (state.description) lines.push(`DESCRIPTION:${e(state.description)}`);
-  lines.push('END:VEVENT', 'END:VCALENDAR');
-  const blob = new Blob([lines.join('\r\n') + '\r\n'], { type: 'text/calendar' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `${slug}.ics`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-}
-
 // --- Owner tools -----------------------------------------------------------
 
 async function patch(body, message) {
@@ -500,9 +472,8 @@ async function patch(body, message) {
 }
 
 function ownerAction(act) {
-  if (act === 'close') patch({ closed: true }, 'Voting closed');
-  else if (act === 'reopen') patch({ closed: false, finalOptionId: null }, 'Voting reopened');
-  else if (act === 'unfinal') patch({ finalOptionId: null }, 'Final mark removed');
+  if (act === 'decide') openDecide();
+  else if (act === 'reopen') patch({ closed: false }, 'Voting reopened');
   else if (act === 'edit') openEdit();
   else if (act === 'delete') openDelete();
 }
@@ -517,6 +488,78 @@ function openDialog(html, cls = '') {
   dlg.querySelectorAll('[data-cancel]').forEach((b) => b.addEventListener('click', () => dlg.close()));
   dlg.showModal();
   return dlg;
+}
+
+// Closing voting means picking the final date: any option, not necessarily the
+// most popular one. The server then emails everyone a calendar invite.
+function openDecide(preselect) {
+  const current = state.finalOptionId;
+  const total = state.participants.length;
+  const max = Math.max(0, ...state.options.map((o) => o.voters.length));
+  const ranked = [...state.options].sort((a, b) => b.voters.length - a.voters.length
+    || `${a.day}${a.start || ''}`.localeCompare(`${b.day}${b.start || ''}`));
+  const initial = preselect || current || ranked[0]?.id;
+  const ownerVoted = state.participants.some((p) => p.id === state.owner.id);
+  const recipients = total + (ownerVoted ? 0 : 1);
+  const lede = current
+    ? 'Everyone who got the current date gets an email with the new one. Opening its invite moves the event in their calendar.'
+    : `Voting closes, and ${recipients === 1 ? 'you get' : `all ${recipients} of you get`} an email with the date and a calendar invite.`;
+
+  const dlg = openDialog(`
+    <form method="dialog" novalidate>
+      <div class="dialog-head"><h2>${current ? 'Change the final date' : 'Pick the final date'}</h2><button type="button" class="icon-btn" data-cancel aria-label="Close">${icon('x')}</button></div>
+      <div class="dialog-body">
+        <p class="dialog-lede">${esc(lede)}</p>
+        <div class="pick-list" role="radiogroup" aria-label="Final date">
+          ${ranked.map((o) => {
+            const n = o.voters.length;
+            const tags = [
+              o.id === current ? `<span class="badge badge-good">${icon('check')}Current</span>` : '',
+              n > 0 && n === max && ranked.length > 1 ? `<span class="badge badge-accent">${icon('star')}Most popular</span>` : '',
+            ].join('');
+            return `<label class="pick">
+              <input type="radio" name="final" value="${esc(o.id)}" ${o.id === initial ? 'checked' : ''}>
+              <span class="check radio">${icon('check')}</span>
+              <span class="pick-main">
+                <span class="pick-when"><span class="when">${esc(fmtLongDay(o.day))}</span>${o.start ? `<span class="time">${esc(fmtTimeRange(o.start, o.end))}</span>` : ''}${tags}</span>
+                <span class="pick-voters">${n ? esc(listNames(o.voters.map((p) => (me.user && p.id === me.user.id ? 'You' : p.name)))) : 'No votes'}</span>
+              </span>
+              <span class="option-count"><strong>${n}</strong>${total ? ` of ${total}` : ''}</span>
+            </label>`;
+          }).join('')}
+        </div>
+        <p class="pick-note" data-note aria-live="polite"></p>
+      </div>
+      <div class="dialog-foot">
+        <span class="dialog-error" data-error></span>
+        <button type="button" class="btn btn-ghost" data-cancel>Cancel</button>
+        <button type="submit" class="btn btn-primary" data-save>${icon('flag')}${current ? 'Change date & notify' : 'Close voting & notify'}</button>
+      </div>
+    </form>`, 'dialog-md');
+
+  const form = dlg.querySelector('form');
+  const btn = dlg.querySelector('[data-save]');
+  const selected = () => state.options.find((o) => o.id === form.elements.final.value);
+  function update() {
+    const o = selected();
+    const n = o.voters.length;
+    let note = total ? `${n} of ${plural(total, 'person', 'people')} can make it.` : 'Nobody has voted yet.';
+    if (n < max) note += ` The most popular date has ${max}.`;
+    dlg.querySelector('[data-note]').textContent = note;
+    btn.disabled = o.id === current;
+  }
+  form.addEventListener('change', update);
+  update();
+  dlg.querySelector('input:checked')?.focus();
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    btn.disabled = true;
+    const ok = await patch({ finalOptionId: selected().id },
+      current ? 'Final date changed. Everyone will get the new date by email.' : 'It’s decided! Everyone will get an email with a calendar invite.');
+    btn.disabled = false;
+    if (ok) dlg.close();
+  });
 }
 
 function openEdit() {

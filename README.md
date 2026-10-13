@@ -16,7 +16,11 @@ Live at **https://when.prutser.freepod.eu**.
   the permalink
 - Single- or multiple-choice voting; change your vote any time
 - Live vote bars with voter names and Gravatars, updated over Server-Sent Events
-- Owner tools: edit, close/reopen, pick a final date (with `.ics` export), delete
+- Owner tools: edit, reopen, delete, and close voting by picking the final
+  date, which may overrule the most popular one
+- When the date is decided, everyone who voted (and the owner) gets an email
+  with the details and a calendar invite; picking a different date later
+  sends an update that moves the event in their calendars
 - Copy-link / native share, plus Open Graph preview images for link unfurls
 - Email notifications when others vote: on by default for the creator,
   opt-in for everyone else, debounced so a burst of changes becomes one email
@@ -51,10 +55,13 @@ Set with `freepod var set KEY=value`. All are optional.
 | `APP_URL` | `https://` + hostname from `.freepod.json` | Base for links in emails |
 | `NOTIFY_DEBOUNCE_SECONDS` | `60` | Quiet time after a voter's last change before emailing |
 | `NOTIFY_MAX_DELAY_SECONDS` | `300` | Upper bound, so constant changes still get reported |
+| `DECISION_DELAY_SECONDS` | `60` | Grace period after the final date is picked, so a misclick can be fixed before anyone is emailed |
 | `UNSUBSCRIBE_SECRET` | generated, stored in the database | HMAC key for unsubscribe links |
 
 Preview the email design with `node scripts/preview-emails.js`, then open
-`var/email-previews/index.html`.
+`var/email-previews/index.html`. With `MAIL_TRANSPORT=file`, each message is
+also written as a complete `.eml`, which a mail client can open to check the
+calendar invite.
 
 ## Deploying
 

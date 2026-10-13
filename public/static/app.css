@@ -417,6 +417,7 @@ dialog {
   box-shadow: var(--shadow-lg);
 }
 dialog.dialog-sm { width: min(440px, calc(100vw - 32px)); }
+dialog.dialog-md { width: min(600px, calc(100vw - 32px)); }
 dialog::backdrop { background: rgb(20 14 8 / .45); backdrop-filter: blur(3px); }
 dialog[open] { animation: dialog-in .2s ease-out; }
 @keyframes dialog-in { from { opacity: 0; transform: translateY(10px) scale(.98); } }
@@ -425,6 +426,7 @@ dialog[open] { animation: dialog-in .2s ease-out; }
 .dialog-body { padding: 20px 24px; display: grid; gap: 22px; overflow: auto; }
 .dialog-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 24px 20px; border-top: 1px solid var(--line); background: var(--surface-2); border-radius: 0 0 18px 18px; }
 .dialog-error { color: var(--danger); font-size: 14px; margin-right: auto; align-self: center; }
+.dialog-lede { margin: 0; color: var(--ink-2); line-height: 1.55; }
 @media (max-width: 560px) {
   .dialog-head, .dialog-body { padding-left: 16px; padding-right: 16px; }
   .dialog-foot { padding: 14px 16px; }
@@ -606,6 +608,7 @@ dialog[open] { animation: dialog-in .2s ease-out; }
 
 .option-side { display: flex; align-items: center; gap: 4px; }
 .option-side:empty { display: none; }
+.icon-btn-space { width: 30px; }
 .option-tags { display: flex; gap: 6px; flex-wrap: wrap; }
 
 .option.just-voted .check { animation: bump .32s ease-out; }
@@ -632,6 +635,27 @@ dialog[open] { animation: dialog-in .2s ease-out; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
 }
+
+/* Final date picker ------------------------------------------------------ */
+
+.dialog-md .dialog-body { gap: 16px; }
+.pick-list { display: grid; gap: 8px; }
+.pick {
+  position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center;
+  padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+}
+.pick:hover { border-color: var(--line-strong); }
+.pick input { position: absolute; opacity: 0; pointer-events: none; }
+.pick:has(input:checked) { border-color: color-mix(in oklab, var(--good) 55%, transparent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--good) 14%, transparent); }
+.pick:has(input:checked) .check { background: var(--good); border-color: var(--good); color: var(--surface); }
+.pick:has(input:focus-visible) { box-shadow: var(--focus); }
+.pick-main { display: grid; gap: 3px; min-width: 0; }
+.pick-when { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; }
+.pick-when .when { font-weight: 600; font-size: 15px; }
+.pick-when .time { color: var(--ink-2); font-size: 14px; font-variant-numeric: tabular-nums; }
+.pick-voters { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-note { margin: 0; min-height: 1.5em; font-size: 14px; color: var(--ink-2); }
 
 /* Message pages (unsubscribe etc.) ---------------------------------------- */
 

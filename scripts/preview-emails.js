@@ -9,7 +9,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { renderVoteEmail } = require('../emails');
+const { renderVoteEmail, renderDecisionEmail } = require('../emails');
+const { googleCalendarUrl } = require('../ics');
 
 const baseUrl = (process.argv[2] || 'https://when.prutser.freepod.eu').replace(/\/$/, '');
 const outDir = path.join(__dirname, '..', 'var', 'email-previews');
@@ -54,6 +55,8 @@ const book = poll({
   ],
 });
 
+const decided = (p, finalId) => ({ ...p, closed: true, finalOptionId: finalId });
+
 const scenarios = [
   {
     name: 'first-vote',
@@ -83,15 +86,47 @@ const scenarios = [
     poll: book,
     changes: [{ voter: people.chen, before: ['2'], after: [] }].map((c) => c),
   },
+  {
+    name: 'decided',
+    description: 'The owner closes voting on the most popular date; sent to someone who can make it',
+    poll: decided(dinner, '2'),
+    recipient: people.anna,
+  },
+  {
+    name: 'decided-overruled',
+    description: 'The owner picks a less popular date; sent to someone who didn’t vote for it',
+    poll: decided(dinner, '1'),
+    recipient: people.chen,
+  },
+  {
+    name: 'decided-owner',
+    description: 'The owner’s own copy, for an all-day date',
+    poll: decided(dinner, '3'),
+    recipient: people.erik,
+  },
+  {
+    name: 'date-changed',
+    description: 'The owner picks a different final date after everyone was emailed',
+    poll: decided(book, '2'),
+    recipient: people.dana,
+    previous: { day: '2026-11-06', start: '21:00', end: null },
+  },
 ];
 
 fs.mkdirSync(outDir, { recursive: true });
 const entries = [];
 for (const s of scenarios) {
   const pollUrl = `${baseUrl}/${s.poll.slug}`;
-  const email = renderVoteEmail({
-    poll: s.poll, changes: s.changes, baseUrl, pollUrl, unsubscribeUrl: `${baseUrl}/unsubscribe/preview-token`,
-  });
+  const final = s.poll.options.find((o) => o.id === s.poll.finalOptionId);
+  const email = s.recipient
+    ? renderDecisionEmail({
+      poll: s.poll, final, previous: s.previous || null, recipient: s.recipient, baseUrl, pollUrl,
+      googleUrl: googleCalendarUrl({ poll: s.poll, option: final, url: pollUrl }),
+      icsUrl: `${baseUrl}/api/polls/${s.poll.slug}/event.ics`,
+    })
+    : renderVoteEmail({
+      poll: s.poll, changes: s.changes, baseUrl, pollUrl, unsubscribeUrl: `${baseUrl}/unsubscribe/preview-token`,
+    });
   fs.writeFileSync(path.join(outDir, `${s.name}.html`), email.html);
   fs.writeFileSync(path.join(outDir, `${s.name}.txt`), `Subject: ${email.subject}\n\n${email.text}\n`);
   entries.push({ ...s, subject: email.subject, size: Buffer.byteLength(email.html) });

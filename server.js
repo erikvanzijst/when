@@ -595,14 +595,52 @@ const api = {
         if (!validTimeZone(String(body.tz))) throw new HttpError(400, 'Unknown time zone.');
         set('tz', String(body.tz));
       }
-      if (body.closed !== undefined) set('closed', !!body.closed);
+      // Closing means deciding: picking the final date closes voting, closing
+      // needs a final date, and reopening clears it. The owner may pick any
+      // option, not just the most popular one.
+      let closed = p.closed;
+      let finalId = p.final_option_id;
+      if (body.closed === false) {
+        closed = false;
+        finalId = null;
+      }
+      if (body.finalOptionId != null) {
+        const fid = String(body.finalOptionId);
+        const { rowCount } = await db.query('SELECT 1 FROM options WHERE id = $1 AND poll_id = $2', [fid, p.id]);
+        if (!rowCount) throw new HttpError(400, 'That option does not belong to this datepicker.');
+        closed = true;
+        finalId = fid;
+      } else if (body.finalOptionId === null && body.closed !== false) {
+        throw new HttpError(400, 'Reopen voting to clear the final date.');
+      }
+      if (body.closed === true && !finalId) throw new HttpError(400, 'Pick the final date to close voting.');
+      const decided = closed && finalId && (finalId !== p.final_option_id || !p.closed);
+      if (closed !== p.closed) set('closed', closed);
+      if (finalId !== p.final_option_id) set('final_option_id', finalId);
+      if (finalId && body.tz !== undefined && String(body.tz) !== p.tz) {
+        const { rows: [f] } = await db.query('SELECT start_time FROM options WHERE id = $1', [finalId]);
+        if (f.start_time) throw new HttpError(409, 'The time zone can’t change once the final date is set. Reopen voting first.');
+      }
 
       if (body.options !== undefined) {
         const options = parseOptions(body.options);
-        const { rows: existing } = await db.query('SELECT id FROM options WHERE poll_id = $1', [p.id]);
+        const { rows: existing } = await db.query(
+          `SELECT id, to_char(day, 'YYYY-MM-DD') AS day, to_char(start_time, 'HH24:MI') AS start, to_char(end_time, 'HH24:MI') AS "end"
+             FROM options WHERE poll_id = $1`,
+          [p.id],
+        );
         const existingIds = new Set(existing.map((r) => r.id));
         const keep = new Set(options.filter((o) => o.id && existingIds.has(o.id)).map((o) => o.id));
         const drop = [...existingIds].filter((id) => !keep.has(id));
+        if (finalId) {
+          // Everyone was emailed this date; moving it goes through reopen and re-pick,
+          // which sends the update.
+          const was = existing.find((r) => r.id === finalId);
+          const now = options.find((o) => o.id === finalId);
+          if (was && (!now || now.day !== was.day || now.start !== was.start || now.end !== was.end)) {
+            throw new HttpError(409, 'The final date can’t be changed or removed. Reopen voting first, or pick a different final date.');
+          }
+        }
         if (drop.length) await db.query('DELETE FROM options WHERE id = ANY($1::bigint[])', [drop]);
         for (const o of options) {
           if (o.id && keep.has(o.id)) {
@@ -617,9 +655,6 @@ const api = {
             );
           }
         }
-        if (p.final_option_id && drop.includes(p.final_option_id) && body.finalOptionId === undefined) {
-          set('final_option_id', null);
-        }
       }
 
       if (body.multi !== undefined && !!body.multi !== p.multi) {
@@ -633,26 +668,30 @@ const api = {
         set('multi', !!body.multi);
       }
 
-      if (body.finalOptionId !== undefined) {
-        if (body.finalOptionId === null) {
-          set('final_option_id', null);
-        } else {
-          const fid = String(body.finalOptionId);
-          const { rowCount } = await db.query('SELECT 1 FROM options WHERE id = $1 AND poll_id = $2', [fid, p.id]);
-          if (!rowCount) throw new HttpError(400, 'That option does not belong to this datepicker.');
-          set('final_option_id', fid);
-        }
-      }
-
       if (sets.length) {
         vals.push(p.id);
         await db.query(`UPDATE polls SET ${sets.join(', ')} WHERE id = $${vals.length}`, vals);
       }
+      if (decided) await notify.recordDecision(db, p.id);
       await bumpVersion(db, p.id);
       return p.id;
     });
     notifyChanged(pollId);
     sendJson(res, 200, await loadPollState(pool, 'id', pollId));
+  },
+
+  async calendar(req, res, url, slug) {
+    const state = await loadPollState(pool, 'slug', slug);
+    if (!state) throw new HttpError(404, 'Datepicker not found.');
+    const final = state.options.find((o) => o.id === state.finalOptionId);
+    if (!final) throw new HttpError(404, 'No final date has been picked yet.');
+    const ics = notify.pollCalendar(state, final, await notify.decisionSequence(pool, state.id));
+    res.writeHead(200, {
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${slug}.ics"`,
+      'Cache-Control': 'no-store',
+    });
+    res.end(ics);
   },
 
   async getWatch(req, res, url, slug) {
@@ -897,6 +936,7 @@ async function route(req, res) {
           if (method === 'DELETE') return api.remove(req, res, url, slug);
         }
         if (parts.length === 4 && parts[3] === 'votes' && method === 'PUT') return api.vote(req, res, url, slug);
+        if (parts.length === 4 && parts[3] === 'event.ics' && method === 'GET') return api.calendar(req, res, url, slug);
         if (parts.length === 4 && parts[3] === 'watch' && method === 'GET') return api.getWatch(req, res, url, slug);
         if (parts.length === 4 && parts[3] === 'watch' && method === 'PUT') return api.putWatch(req, res, url, slug);
         if (parts.length === 4 && parts[3] === 'events' && method === 'GET') return handleEvents(req, res, slug);
