@@ -65,7 +65,7 @@ calendar invite.
 
 ## Deploying
 
-Runs on [Freepod](https://freepod.eu); `.freepod.json` holds the deployment
+Runs on [Freepod](https://freepod.dev); `.freepod.json` holds the deployment
 config. Ship with `freepod deploy`.
 
 ## License
