@@ -777,7 +777,6 @@ function sendPage(res, status, html) {
   res.writeHead(status, {
     'Content-Type': 'text/html; charset=utf-8',
     'Cache-Control': 'no-cache',
-    'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'strict-origin-when-cross-origin',
   });
   res.end(html);
@@ -908,6 +907,37 @@ async function unsubscribe(req, res, token) {
 }
 
 // ---------------------------------------------------------------------------
+// Same-origin guard
+//
+// The pages and the API share one origin, so there is no CORS. Requests that
+// change data are refused when a page on another origin made the browser send
+// them. Requests from outside a browser (curl, RFC 8058 one-click unsubscribe
+// from mail providers) carry neither header and pass.
+// ---------------------------------------------------------------------------
+
+// Sent with every response unless the handler sets them itself: only the app
+// may frame its pages, and browsers take each response's content type as given.
+const DEFAULT_HEADERS = {
+  'Content-Security-Policy': "frame-ancestors 'self'",
+  'X-Frame-Options': 'SAMEORIGIN',
+  'X-Content-Type-Options': 'nosniff',
+};
+
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+function fromOtherOrigin(req) {
+  const site = req.headers['sec-fetch-site'];
+  if (site) return site !== 'same-origin' && site !== 'none';
+  const origin = req.headers.origin;
+  if (!origin) return false;
+  try {
+    return new URL(origin).host !== hostOf(req);
+  } catch {
+    return true;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -951,7 +981,7 @@ async function route(req, res) {
     const e = (url.searchParams.get('e') || '').replace(/\|/g, '');
     const rd = url.searchParams.get('rd') || '/';
     res.writeHead(302, {
-      'Set-Cookie': `dev_user=${encodeURIComponent(`${u}|${n}|${e}`)}; Path=/; SameSite=Lax`,
+      'Set-Cookie': `dev_user=${encodeURIComponent(`${u}|${n}|${e}`)}; Path=/; HttpOnly; SameSite=Lax`,
       Location: rd.startsWith('/') ? rd : '/',
     });
     return res.end();
@@ -999,7 +1029,12 @@ async function route(req, res) {
 }
 
 const server = http.createServer(async (req, res) => {
+  // Headers passed to writeHead() override these defaults.
+  for (const [name, value] of Object.entries(DEFAULT_HEADERS)) res.setHeader(name, value);
   try {
+    if (!SAFE_METHODS.has(req.method) && fromOtherOrigin(req)) {
+      throw new HttpError(403, 'Cross-origin request refused.');
+    }
     await route(req, res);
   } catch (err) {
     if (err instanceof HttpError) {
