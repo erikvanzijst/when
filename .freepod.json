@@ -2,6 +2,7 @@
   "$schema": "https://freepod.eu/api/products/custom/project-schema",
   "version": 2,
   "deployment": "bfc60dc5-d9ba-4aa0-aa08-14e7dd8f57cb",
+  "name": "When",
   "description": "Find the date that works for everyone: pick a few dates, share one link, and watch the votes come in live.",
   "icon": "icon.png",
   "auth": {
