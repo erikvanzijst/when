@@ -1,16 +1,13 @@
 {
-  "version": 1,
-  "deployment": {
-    "id": "bfc60dc5-d9ba-4aa0-aa08-14e7dd8f57cb",
-    "name": "custom-user-app-2jypys"
-  },
-  "user_values": {
-    "hostname": "when.prutser.freepod.eu",
-    "auth": {
-      "enabled": true,
-      "public": [
-        "^/"
-      ]
-    }
+  "$schema": "https://freepod.eu/api/products/custom/project-schema",
+  "version": 2,
+  "deployment": "bfc60dc5-d9ba-4aa0-aa08-14e7dd8f57cb",
+  "description": "Find the date that works for everyone: pick a few dates, share one link, and watch the votes come in live.",
+  "icon": "icon.png",
+  "auth": {
+    "enabled": true,
+    "public": [
+      "^/"
+    ]
   }
 }
